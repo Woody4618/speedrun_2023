@@ -223,7 +223,7 @@ GameObject:
   - component: {fileID: 3474150409725601038}
   - component: {fileID: 8104984189572608549}
   m_Layer: 5
-  m_Name: ScoreBlimp 1(Clone) 1(Clone)
+  m_Name: CollectResourceBlimp
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
