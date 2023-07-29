@@ -798,6 +798,7 @@ dependencies = [
  "anchor-lang",
  "bytemuck",
  "gpl-session",
+ "solana-program",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ public class LumberjackScreen : MonoBehaviour
 
     public TextMeshProUGUI EnergyAmountText;
     public TextMeshProUGUI WoodAmountText;
+    public TextMeshProUGUI StoneAmountText;
     public TextMeshProUGUI NextEnergyInText;
 
     public GameObject LoadingSpinner;
@@ -71,6 +72,8 @@ public class LumberjackScreen : MonoBehaviour
 
     private async void OnLoginWalletAdapterButtonClicked()
     {
+        Web3.Instance.customRpc = "https://broken-empty-reel.solana-devnet.quiknode.pro/333a00f389fe630f4d331dd740b3aa6b040f8598/";
+        Web3.Instance.webSocketsRpc = "wss://broken-empty-reel.solana-devnet.quiknode.pro/333a00f389fe630f4d331dd740b3aa6b040f8598/";
         await Web3.Instance.LoginWalletAdapter();
     }
 
@@ -127,17 +130,18 @@ public class LumberjackScreen : MonoBehaviour
         }
         
         EnergyAmountText.text = LumberjackService.Instance.CurrentPlayerData.Energy.ToString();
-        WoodAmountText.text = LumberjackService.Instance.CurrentPlayerData.Xp.ToString();
+        WoodAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Wood.ToString();
+        StoneAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Stone.ToString();
     }
 
     private void OnChuckWoodSessionButtonClicked()
     {
-        LumberjackService.Instance.ChopTree(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"));
+        LumberjackService.Instance.ChopTree(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), 1 ,0);
     }
 
     private void OnChuckWoodButtonClicked()
     {
-       LumberjackService.Instance.ChopTree(false);
+       LumberjackService.Instance.OnCellClicked(0 ,1);
     }
 
     private async void OnEditorLoginClicked()

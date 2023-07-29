@@ -2,15 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using DefaultNamespace;
 using Frictionless;
 using Lumberjack;
 using Lumberjack.Accounts;
 using Lumberjack.Program;
+using Lumberjack.Types;
 using Solana.Unity.Programs;
 using Solana.Unity.Programs.Models;
 using Solana.Unity.Rpc.Core.Http;
-using Solana.Unity.Rpc.Core.Sockets;
-using Solana.Unity.Rpc.Messages;
 using Solana.Unity.Rpc.Models;
 using Solana.Unity.Rpc.Types;
 using Solana.Unity.SDK;
@@ -25,17 +25,25 @@ public class LumberjackService : MonoBehaviour
     public const int TIME_TO_REFILL_ENERGY = 60;
     public const int MAX_ENERGY = 10;
     
+    public const byte BUILDING_TYPE_TREE = 0;
+    public const byte BUILDING_TYPE_EMPTY = 1;
+    public const byte BUILDING_TYPE_SAWMILL = 2;
+    public const byte BUILDING_TYPE_MINE = 3;
+    
     public static LumberjackService Instance { get; private set; }
     public static Action<PlayerData> OnPlayerDataChanged;
     public static Action<BoardAccount> OnBoardDataChanged;
+    public static Action<GameActionHistory> OnGameActionHistoryChanged;
     public static Action OnInitialDataLoaded;
     public bool IsAnyTransactionInProgress => transactionsInProgress > 0;
     public PlayerData CurrentPlayerData;
     public BoardAccount CurrentBoardAccount;
+    public GameActionHistory CurrentGameActionHistory;
 
     private SessionWallet sessionWallet;
     private PublicKey PlayerDataPDA;
     private PublicKey BoardPDA;
+    private PublicKey GameActionsPDA;
     private bool _isInitialized;
     private LumberjackClient lumberjackClient;
     private int transactionsInProgress;
@@ -73,12 +81,16 @@ public class LumberjackService : MonoBehaviour
         }
 
         PublicKey.TryFindProgramAddress(new[]
-                {Encoding.UTF8.GetBytes("player1"), account.PublicKey.KeyBytes},
+                {Encoding.UTF8.GetBytes("player"), account.PublicKey.KeyBytes},
             LumberjackProgramIdPubKey, out PlayerDataPDA, out byte bump);
 
         PublicKey.TryFindProgramAddress(new[]
                 {Encoding.UTF8.GetBytes("board")},
             LumberjackProgramIdPubKey, out BoardPDA, out byte bump2);
+
+        PublicKey.TryFindProgramAddress(new[]
+                {Encoding.UTF8.GetBytes("gameActions")},
+            LumberjackProgramIdPubKey, out GameActionsPDA, out byte bump3);
 
         lumberjackClient = new LumberjackClient(Web3.Rpc, Web3.WsRpc, LumberjackProgramIdPubKey);
         ServiceFactory.Resolve<SolPlayWebSocketService>().Connect(Web3.WsRpc.NodeAddress.AbsoluteUri);
@@ -124,11 +136,27 @@ public class LumberjackService : MonoBehaviour
                 OnBoardDataChanged?.Invoke(boardAccount.ParsedResult);
             }
             
-            _isInitialized = true;
         }
         catch (Exception e)
         {
             Debug.Log("Probably playerData not available " + e.Message);
+        }
+
+        AccountResultWrapper<GameActionHistory> gameActionHistroy = null;
+
+        try
+        {
+            gameActionHistroy = await lumberjackClient.GetGameActionHistoryAsync(GameActionsPDA, Commitment.Confirmed);
+            if (gameActionHistroy.ParsedResult != null)
+            {
+                CurrentGameActionHistory = gameActionHistroy.ParsedResult;
+                OnGameActionHistoryChanged?.Invoke(gameActionHistroy.ParsedResult);
+            }
+            
+        }
+        catch (Exception e)
+        {
+            Debug.Log("gameActionHistroy not available " + e.Message);
         }
 
         ServiceFactory.Resolve<SolPlayWebSocketService>().SubscribeToPubKeyData(PlayerDataPDA, result =>
@@ -146,6 +174,14 @@ public class LumberjackService : MonoBehaviour
             CurrentBoardAccount = boardAccount;
             OnBoardDataChanged?.Invoke(boardAccount);
         });
+
+        ServiceFactory.Resolve<SolPlayWebSocketService>().SubscribeToPubKeyData(GameActionsPDA, result =>
+        {
+            var gameActionHistory = GameActionHistory.Deserialize(Convert.FromBase64String(result.result.value.data[0]));
+            Debug.Log("GameActions data socket new game action: " + gameActionHistory.GameActions[0].ActionType + " by " + gameActionHistory.GameActions[0].Player + " is collectable: " + IsCollectable(gameActionHistory.GameActions[0].Tile));
+            CurrentGameActionHistory = gameActionHistory;
+            OnGameActionHistoryChanged?.Invoke(gameActionHistory);
+        });
     }
 
     public async Task<RequestResult<string>> InitGameDataAccount(bool useSession)
@@ -160,6 +196,7 @@ public class LumberjackService : MonoBehaviour
         InitPlayerAccounts accounts = new InitPlayerAccounts();
         accounts.Player = PlayerDataPDA;
         accounts.Board = BoardPDA;
+        accounts.GameActions = GameActionsPDA;
         accounts.Signer = Web3.Account;
         accounts.SystemProgram = SystemProgram.ProgramIdKey;
 
@@ -195,7 +232,7 @@ public class LumberjackService : MonoBehaviour
         return sessionWallet;
     }
 
-    public async void ChopTree(bool useSession)
+    public async void ChopTree(bool useSession, byte x, byte y)
     {
         var tx = new Transaction()
         {
@@ -207,7 +244,8 @@ public class LumberjackService : MonoBehaviour
         ChopTreeAccounts accounts = new ChopTreeAccounts();
         accounts.Player = PlayerDataPDA;
         accounts.Board = BoardPDA;
-
+        accounts.GameActions = GameActionsPDA;
+        accounts.Avatar = GetAvatar();
         if (useSession)
         {
             if (!(await sessionWallet.IsSessionTokenInitialized()))
@@ -218,7 +256,7 @@ public class LumberjackService : MonoBehaviour
                 var createSessionIX = sessionWallet.CreateSessionIX(topUp, validity);
                 accounts.Signer = Web3.Account.PublicKey;
                 tx.Add(createSessionIX);
-                var chopInstruction = LumberjackProgram.ChopTree(accounts, 0, 0, LumberjackProgramIdPubKey);
+                var chopInstruction = LumberjackProgram.ChopTree(accounts, x, y, LumberjackProgramIdPubKey);
                 tx.Add(chopInstruction);
                 Debug.Log("Has no session -> partial sign");
                 tx.PartialSign(new[] { Web3.Account, sessionWallet.Account });
@@ -230,7 +268,7 @@ public class LumberjackService : MonoBehaviour
                 accounts.SessionToken = sessionWallet.SessionTokenPDA;
                 accounts.Signer = sessionWallet.Account.PublicKey;
                 Debug.Log("Has session -> sign and send session wallet");
-                var chopInstruction = LumberjackProgram.ChopTree(accounts, 0, 0, LumberjackProgramIdPubKey);
+                var chopInstruction = LumberjackProgram.ChopTree(accounts, x, y, LumberjackProgramIdPubKey);
                 tx.Add(chopInstruction);
                 SendAndConfirmTransaction(sessionWallet, tx, "Chop Tree");
             }
@@ -239,10 +277,178 @@ public class LumberjackService : MonoBehaviour
         {
             tx.FeePayer = Web3.Account.PublicKey;
             accounts.Signer = Web3.Account.PublicKey;
-            var chopInstruction = LumberjackProgram.ChopTree(accounts, 0, 0, LumberjackProgramIdPubKey);
+            var chopInstruction = LumberjackProgram.ChopTree(accounts, x, y, LumberjackProgramIdPubKey);
             tx.Add(chopInstruction);
             Debug.Log("Sign without session");
             SendAndConfirmTransaction(Web3.Wallet, tx, "Chop Tree without session");
+        }
+    }
+    
+    public async void Build(bool useSession, byte x, byte y, byte buildingType)
+    {
+        var tx = new Transaction()
+        {
+            FeePayer = Web3.Account,
+            Instructions = new List<TransactionInstruction>(),
+            RecentBlockHash = await Web3.BlockHash(maxSeconds:1)
+        };
+
+        BuildAccounts accounts = new BuildAccounts();
+        accounts.Player = PlayerDataPDA;
+        accounts.Board = BoardPDA;
+        accounts.GameActions = GameActionsPDA;
+        accounts.Avatar = GetAvatar();
+        if (useSession)
+        {
+            if (!(await sessionWallet.IsSessionTokenInitialized()))
+            {
+                var topUp = true;
+
+                var validity = DateTimeOffset.UtcNow.AddHours(23).ToUnixTimeSeconds();
+                var createSessionIX = sessionWallet.CreateSessionIX(topUp, validity);
+                accounts.Signer = Web3.Account.PublicKey;
+                tx.Add(createSessionIX);
+                var chopInstruction = LumberjackProgram.Build(accounts, x, y, buildingType, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                Debug.Log("Has no session -> partial sign");
+                tx.PartialSign(new[] { Web3.Account, sessionWallet.Account });
+                SendAndConfirmTransaction(Web3.Wallet, tx, "Build and init session");
+            }
+            else
+            {
+                tx.FeePayer = sessionWallet.Account.PublicKey;
+                accounts.SessionToken = sessionWallet.SessionTokenPDA;
+                accounts.Signer = sessionWallet.Account.PublicKey;
+                Debug.Log("Has session -> sign and send session wallet");
+                var chopInstruction = LumberjackProgram.Build(accounts, x, y, buildingType, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                SendAndConfirmTransaction(sessionWallet, tx, "Build");
+            }
+        }
+        else
+        {
+            tx.FeePayer = Web3.Account.PublicKey;
+            accounts.Signer = Web3.Account.PublicKey;
+            var chopInstruction = LumberjackProgram.Build(accounts, x, y, buildingType, LumberjackProgramIdPubKey);
+            tx.Add(chopInstruction);
+            Debug.Log("Sign without session");
+            SendAndConfirmTransaction(Web3.Wallet, tx, "Build without session");
+        }
+    }
+    
+    public async void Upgrade(bool useSession, byte x, byte y)
+    {
+        var tx = new Transaction()
+        {
+            FeePayer = Web3.Account,
+            Instructions = new List<TransactionInstruction>(),
+            RecentBlockHash = await Web3.BlockHash(maxSeconds:1)
+        };
+
+        UpgradeAccounts accounts = new UpgradeAccounts();
+        accounts.Player = PlayerDataPDA;
+        accounts.Board = BoardPDA;
+        accounts.GameActions = GameActionsPDA;
+        accounts.Avatar = GetAvatar();
+        if (useSession)
+        {
+            if (!(await sessionWallet.IsSessionTokenInitialized()))
+            {
+                var topUp = true;
+
+                var validity = DateTimeOffset.UtcNow.AddHours(23).ToUnixTimeSeconds();
+                var createSessionIX = sessionWallet.CreateSessionIX(topUp, validity);
+                accounts.Signer = Web3.Account.PublicKey;
+                tx.Add(createSessionIX);
+                var chopInstruction = LumberjackProgram.Upgrade(accounts, x, y, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                Debug.Log("Has no session -> partial sign");
+                tx.PartialSign(new[] { Web3.Account, sessionWallet.Account });
+                SendAndConfirmTransaction(Web3.Wallet, tx, "Upgrade and init session");
+            }
+            else
+            {
+                tx.FeePayer = sessionWallet.Account.PublicKey;
+                accounts.SessionToken = sessionWallet.SessionTokenPDA;
+                accounts.Signer = sessionWallet.Account.PublicKey;
+                Debug.Log("Has session -> sign and send session wallet");
+                var chopInstruction = LumberjackProgram.Upgrade(accounts, x, y, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                SendAndConfirmTransaction(sessionWallet, tx, "Upgrade");
+            }
+        }
+        else
+        {
+            tx.FeePayer = Web3.Account.PublicKey;
+            accounts.Signer = Web3.Account.PublicKey;
+            var chopInstruction = LumberjackProgram.Upgrade(accounts, x, y, LumberjackProgramIdPubKey);
+            tx.Add(chopInstruction);
+            Debug.Log("Sign without session");
+            SendAndConfirmTransaction(Web3.Wallet, tx, "Upgrade without session");
+        }
+    }
+
+    private PublicKey GetAvatar()
+    {
+        var nftService = ServiceFactory.Resolve<NftService>();
+        if (nftService.SelectedNft != null)
+        {
+            return new PublicKey(nftService.SelectedNft.metaplexData.data.mint);
+        }
+        
+        return Web3.Account.PublicKey;
+    }
+    
+    public async void Collect(bool useSession, byte x, byte y)
+    {
+        var tx = new Transaction()
+        {
+            FeePayer = Web3.Account,
+            Instructions = new List<TransactionInstruction>(),
+            RecentBlockHash = await Web3.BlockHash(maxSeconds:1)
+        };
+
+        CollectAccounts accounts = new CollectAccounts();
+        accounts.Player = PlayerDataPDA;
+        accounts.Board = BoardPDA;
+        accounts.GameActions = GameActionsPDA;
+        accounts.Avatar = GetAvatar();
+        
+        if (useSession)
+        {
+            if (!(await sessionWallet.IsSessionTokenInitialized()))
+            {
+                var topUp = true;
+
+                var validity = DateTimeOffset.UtcNow.AddHours(23).ToUnixTimeSeconds();
+                var createSessionIX = sessionWallet.CreateSessionIX(topUp, validity);
+                accounts.Signer = Web3.Account.PublicKey;
+                tx.Add(createSessionIX);
+                var chopInstruction = LumberjackProgram.Collect(accounts, x, y, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                Debug.Log("Has no session -> partial sign");
+                tx.PartialSign(new[] { Web3.Account, sessionWallet.Account });
+                SendAndConfirmTransaction(Web3.Wallet, tx, "Collect and init session");
+            }
+            else
+            {
+                tx.FeePayer = sessionWallet.Account.PublicKey;
+                accounts.SessionToken = sessionWallet.SessionTokenPDA;
+                accounts.Signer = sessionWallet.Account.PublicKey;
+                Debug.Log("Has session -> sign and send session wallet");
+                var chopInstruction = LumberjackProgram.Collect(accounts, x, y, LumberjackProgramIdPubKey);
+                tx.Add(chopInstruction);
+                SendAndConfirmTransaction(sessionWallet, tx, "Collect");
+            }
+        }
+        else
+        {
+            tx.FeePayer = Web3.Account.PublicKey;
+            accounts.Signer = Web3.Account.PublicKey;
+            var chopInstruction = LumberjackProgram.Collect(accounts, x, y, LumberjackProgramIdPubKey);
+            tx.Add(chopInstruction);
+            Debug.Log("Sign without session");
+            SendAndConfirmTransaction(Web3.Wallet, tx, "Collect without session");
         }
     }
     
@@ -256,5 +462,115 @@ public class LumberjackService : MonoBehaviour
         }
         Debug.Log($"Send tranaction {label} with response: {res.RawRpcResponse}");
         transactionsInProgress--;
+    }
+
+    public static bool IsCollectable(TileData tileData)
+    {
+        long unixTime = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds();
+
+        var tileDataBuildingStartCollectTime = tileData.BuildingStartCollectTime + new TimeSpan(0,0,61).TotalSeconds;
+        //Debug.Log("Time: " + tileDataBuildingStartCollectTime + " current time " + unixTime + " diff " + (unixTime - tileDataBuildingStartCollectTime));
+        
+        return tileDataBuildingStartCollectTime < unixTime;
+    }
+
+    public static string GetName(TileData tileData)
+    {
+        switch (tileData.BuildingType)
+        {
+            case BUILDING_TYPE_MINE:
+                return "Stone mine";
+
+            case BUILDING_TYPE_TREE:
+                return "Tree";
+
+            case BUILDING_TYPE_EMPTY:
+                return "empty";
+
+            case BUILDING_TYPE_SAWMILL:
+                return "Sawmill";
+        }
+
+        return "NaN";
+    }
+
+    public void OnCellClicked(byte x, byte y)
+    {
+        if (!CheckForEnergy())
+        {
+            return;
+        }
+        var cell = ServiceFactory.Resolve<BoardManager>().GetCell(x, y);
+        var tileData = CurrentBoardAccount.Data[x][y];
+        if (tileData.BuildingType == BUILDING_TYPE_EMPTY)
+        {
+            // Build 
+            var uiData = new BuildBuildingPopupUiData(Web3.Wallet, config =>
+            {
+                Build(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y, config.building_type);
+            });
+            ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.BuildBuildingPopup, uiData);
+        } else if (tileData.BuildingType == BUILDING_TYPE_TREE)
+        {
+            var uiData = new ChopTreePopupUiData(Web3.Wallet, () =>
+            {
+                ChopTree(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);
+            });
+            ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.ChopTreePopup, uiData);
+        } else if (tileData.BuildingType == BUILDING_TYPE_MINE ||
+                   tileData.BuildingType == BUILDING_TYPE_SAWMILL)
+        {
+
+            if (IsCollectable(tileData))
+            {
+                // Collect
+                Collect(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);
+            }
+            else
+            {
+                var uiData = new UpgradeBuildingPopupUiData(Web3.Wallet, () =>
+                {
+                    Upgrade(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);    
+                });
+                ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.UpgradeBuildingPopup, uiData);
+            }
+        }
+    }
+
+    private bool CheckForEnergy()
+    {
+        if (CurrentPlayerData.Energy == 0)
+        {
+            ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.RefillEnergyPopup, new RefillEnergyPopupUiData(Web3.Wallet));
+            return false;
+        }
+        return true;
+    }
+
+    public async Task RefillEnergy()
+    {
+        var tx = new Transaction()
+        {
+            FeePayer = Web3.Account,
+            Instructions = new List<TransactionInstruction>(),
+            RecentBlockHash = await Web3.BlockHash(maxSeconds:1)
+        };
+        
+        RefillEnergyAccounts accounts = new RefillEnergyAccounts();
+        accounts.Player = PlayerDataPDA;
+        accounts.SystemProgram = SystemProgram.ProgramIdKey;
+        accounts.Treasury = new PublicKey("CYg2vSJdujzEC1E7kHMzB9QhjiPLRdsAa4Js7MkuXfYq");
+        
+        tx.FeePayer = Web3.Account.PublicKey;
+        accounts.Signer = Web3.Account.PublicKey;
+        var ix = LumberjackProgram.RefillEnergy(accounts, LumberjackProgramIdPubKey);
+        tx.Add(ix);
+        SendAndConfirmTransaction(Web3.Wallet, tx, "Refill energy");
+        
+        var res=  await Web3.Wallet.SignAndSendTransaction(tx, commitment: Commitment.Confirmed);
+        if (res.WasSuccessful && res.Result != null)
+        {
+            await Web3.Rpc.ConfirmTransaction(res.Result, Commitment.Confirmed);
+        }
     }
 }

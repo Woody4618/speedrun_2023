@@ -7,7 +7,7 @@ lumberjack = "HsT4yX959Qh1vis8fEqoQdgrHEJuKvaWGtHoPcTjk4mJ"
 url = "https://anchor.projectserum.com"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "/Users/jonasmac2/.config/solana/id.json"
 
 [scripts]

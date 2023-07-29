@@ -9,6 +9,8 @@ namespace SolPlay.Scripts.Ui
         public GameObject Root;
         public Button CloseButton;
 
+        protected UiService.UiData uiData;
+
         protected void Awake()
         {
             Root.gameObject.SetActive(false);
@@ -16,6 +18,7 @@ namespace SolPlay.Scripts.Ui
 
         public virtual void Open(UiService.UiData uiData)
         {
+            this.uiData = uiData;
             if (CloseButton != null)
             {
                 CloseButton.onClick.RemoveAllListeners();
