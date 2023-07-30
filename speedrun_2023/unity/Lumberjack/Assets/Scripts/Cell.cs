@@ -18,7 +18,7 @@ public class Cell : MonoBehaviour
         MeshRenderer.material = Materials[Random.Range(0, Materials.Count)];
     }
 
-    private void OnMouseDown()
+    private void OnMouseUp()
     {
         if (UiService.IsPointerOverUIObject())
         {

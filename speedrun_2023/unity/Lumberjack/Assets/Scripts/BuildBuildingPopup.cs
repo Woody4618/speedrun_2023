@@ -5,22 +5,36 @@ using SolPlay.Scripts.Ui;
 using UnityEngine;
 using UnityEngine.UI;
 
-
 public class BuildBuildingPopup : BasePopup
 {
-    public Button SawMillButton;
-    public Button StoneMineButton;
     public GameObject LoadingSpinner;
-    
-    void Start()
-    {
-        SawMillButton.onClick.AddListener(OnBuildSawMillButtonClicked);
-        StoneMineButton.onClick.AddListener(OnBuildMineButtonClicked);
-    }
+    public GameObject ListRoot;
+    public BuildBuildingListItemView BuildBuildingListItemViewPrefab;
 
     public override void Open(UiService.UiData uiData)
     {
         var refillUiData = (uiData as BuildBuildingPopupUiData);
+
+        foreach (Transform trans in ListRoot.transform)
+        {
+            Destroy(trans.gameObject);
+        }
+        
+        foreach (var config in ServiceFactory.Resolve<BoardManager>().tileConfigs)
+        {
+            if (config.IsBuildable)
+            {
+                var newListItem = Instantiate(BuildBuildingListItemViewPrefab, ListRoot.transform);
+                newListItem.SetData(config, view =>
+                {
+                    if (LumberjackService.HasEnoughResources(BalancingService.GetBuildCost(config)))
+                    {
+                        (uiData as BuildBuildingPopupUiData).OnClick(config);
+                        Close();
+                    }
+                });
+            }
+        }
         
         if (refillUiData == null)
         {
@@ -29,19 +43,5 @@ public class BuildBuildingPopup : BasePopup
         }
 
         base.Open(uiData);
-    }
-
-    private async void OnBuildSawMillButtonClicked()
-    {
-        var config = ServiceFactory.Resolve<BoardManager>().FindTileConfigByName("SawMill");
-        (uiData as BuildBuildingPopupUiData).OnClick(config);
-        Close();
-    }
-    
-    private async void OnBuildMineButtonClicked()
-    {
-        var config = ServiceFactory.Resolve<BoardManager>().FindTileConfigByName("StoneMine");
-        (uiData as BuildBuildingPopupUiData).OnClick(config);
-        Close();
     }
 }

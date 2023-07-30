@@ -23,3 +23,4 @@ MonoBehaviour:
   building_type: 3
   BuildingName: StoneMine
   Icon: {fileID: 21300000, guid: c2406e48b75954ed9a5c40c2778c0889, type: 3}
+  IsBuildable: 1

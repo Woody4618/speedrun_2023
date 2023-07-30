@@ -39,10 +39,14 @@ public class Tile : MonoBehaviour
         }
     }
     
-    public void UpdateVisualState()
+    public void UpdateVisualState() 
     {
-        Destroy(Model);
-        Model = Instantiate(currentConfig.Prefab, transform);
+        if (Model == null || Model.name != currentConfig.Prefab.name)
+        {
+            Destroy(Model);
+            Model = Instantiate(currentConfig.Prefab, transform);
+            Model.name = currentConfig.Prefab.name;
+        }
         StartCoroutine(DoNextFrame());
     }
 
@@ -54,6 +58,11 @@ public class Tile : MonoBehaviour
         if (_productionIndicator != null)
         {
             _productionIndicator.SetData(currentTileData);
+        }
+        var healthbar = GetComponentInChildren<HealthBar>(true);
+        if (healthbar != null)
+        {
+            healthbar.SetData((int) currentTileData.BuildingHealth, 9000);
         }
     }
 

@@ -3,7 +3,6 @@ use gpl_session::{SessionError, SessionToken, session_auth_or, Session};
 pub mod state;
 use solana_program::pubkey;
 pub use state::*;
-use anchor_lang::prelude::*;
 
 declare_id!("HsT4yX959Qh1vis8fEqoQdgrHEJuKvaWGtHoPcTjk4mJ");
 pub const TREASURY_PUBKEY: Pubkey = pubkey!("CYg2vSJdujzEC1E7kHMzB9QhjiPLRdsAa4Js7MkuXfYq");
@@ -22,6 +21,14 @@ pub enum GameErrorCode {
     WrongAuthority,
     #[msg("Tile cant be collected")]
     TileCantBeCollected,
+    #[msg("Production not ready yet")]
+    ProductionNotReadyYet,
+    #[msg("Building type not collectable")]
+    BuildingTypeNotCollectable,
+    #[msg("Not enough stone")]
+    NotEnoughStone,
+    #[msg("Not enough wood")]
+    NotEnoughWood,
 }
 
 const TIME_TO_REFILL_ENERGY: i64 = 60;
@@ -39,6 +46,18 @@ pub mod lumberjack {
         ctx.accounts.player.energy = MAX_ENERGY;
         ctx.accounts.player.last_login = Clock::get()?.unix_timestamp;
         ctx.accounts.player.authority = ctx.accounts.signer.key();
+
+        Ok(())
+    }
+
+    pub fn restart_game(ctx: Context<RestartGame>) -> Result<()> {
+        let board = &mut ctx.accounts.board.load_mut()?;
+
+        if board.evil_won || board.good_won {
+            let game_action = &mut ctx.accounts.game_actions.load_mut()?;
+            board.Restart(game_action, ctx.accounts.signer.key())?;            
+        }    
+        
         Ok(())
     }
 
@@ -49,15 +68,20 @@ pub mod lumberjack {
     pub fn chop_tree(mut ctx: Context<BoardAction>, x: u8, y: u8) -> Result<()> {
         let account = &mut ctx.accounts;
         update_energy(account)?;
-        let board = &mut ctx.accounts.board.load_mut()?;
 
-        if ctx.accounts.player.energy == 0 {
+        let board = &mut ctx.accounts.board.load_mut()?;
+        let game_action = &mut ctx.accounts.game_actions.load_mut()?;
+
+        if !board.initialized {
+            board.Restart(game_action, ctx.accounts.player.key())?;
+        }    
+        if ctx.accounts.player.energy < 3 {
             return err!(GameErrorCode::NotEnoughEnergy);
         }
-        let game_action = &mut ctx.accounts.game_actions.load_mut()?;
+
         board.chop_tree(x, y, ctx.accounts.player.key(), ctx.accounts.avatar.key(), game_action)?;
 
-        ctx.accounts.player.energy -= 1;
+        ctx.accounts.player.energy -= 3;
         let wood = board.wood;
 
         msg!("You chopped a tree and got 1 wood. You have {} wood and {} energy left.",wood, ctx.accounts.player.energy);
@@ -73,10 +97,10 @@ pub mod lumberjack {
         update_energy(account)?;
         let board = &mut ctx.accounts.board.load_mut()?;
 
-
         if ctx.accounts.player.energy == 0 {
             return err!(GameErrorCode::NotEnoughEnergy);
         }
+
         let game_action = &mut ctx.accounts.game_actions.load_mut()?;
         board.build(x, y, building_type, ctx.accounts.player.key(), ctx.accounts.avatar.key(), game_action)?;
 
@@ -196,6 +220,30 @@ pub struct InitPlayer <'info> {
         bump,
     )]
     pub player: Account<'info, PlayerData>,
+    #[account( 
+        init_if_needed,
+        space = 10024,
+        seeds = [b"board".as_ref()],
+        payer = signer,
+        bump,
+    )]
+    pub board: AccountLoader<'info, BoardAccount>,
+    #[account(
+        init_if_needed,
+        seeds = [b"gameActions"],
+        bump,
+        payer = signer,
+        space = 10024
+    )]
+    pub game_actions: AccountLoader<'info, GameActionHistory>,    
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+
+}
+
+#[derive(Accounts)]
+pub struct RestartGame <'info> {
     #[account( 
         init_if_needed,
         space = 10024,

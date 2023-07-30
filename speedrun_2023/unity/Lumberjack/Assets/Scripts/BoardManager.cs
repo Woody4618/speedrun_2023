@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using Frictionless;
 using Lumberjack.Accounts;
@@ -23,6 +24,8 @@ namespace DefaultNamespace
         public const int ACTION_TYPE_BUILD = 1;
         public const int ACTION_TYPE_UPGRADE = 2;
         public const int ACTION_TYPE_COLLECT = 3;
+        public const int ACTION_TYPE_FIGHT = 4;
+        public const int ACTION_TYPE_RESET = 5;
         
         public Tile TilePrefab; 
         public Cell CellPrefab; 
@@ -30,13 +33,15 @@ namespace DefaultNamespace
         public List<Tile> tiles = new List<Tile>();
         public TileConfig[] tileConfigs;
         public TextBlimp3D CoinBlimpPrefab;
+        public TextBlimp3D FightBlimp;
         
         public bool IsWaiting;
         
         private bool isInitialized;
         private Dictionary<ulong, GameAction> alreadyPrerformedGameActions = new Dictionary<ulong, GameAction>();
         private bool HasPlayedInitialAnimations = false;
-
+        private BoardAccount CurrentBaordAccount;
+        
         private void Awake()
         {
             ServiceFactory.RegisterSingleton(this);
@@ -79,7 +84,7 @@ namespace DefaultNamespace
                 Destroy(tile.gameObject);
             }
             tiles.Clear();
-            
+            alreadyPrerformedGameActions.Clear();
             for (int i = 0; i < WIDTH; i++)
             {
                 for (int j = 0; j < HEIGHT; j++)
@@ -89,9 +94,20 @@ namespace DefaultNamespace
             }
         }
 
-        private void OnBoardDataChange(BoardAccount playerData)
+        private void OnBoardDataChange(BoardAccount boardAccount)
         {
-            SetData(playerData);
+            bool wasGameOver = CurrentBaordAccount != null && (CurrentBaordAccount.EvilWon || CurrentBaordAccount.GoodWon);
+            CurrentBaordAccount = boardAccount;
+            bool isGameOver = CurrentBaordAccount.EvilWon || CurrentBaordAccount.GoodWon;
+
+            if (wasGameOver && !isGameOver)
+            {
+                OnGameReset();
+                CreateStartingTiles(CurrentBaordAccount);
+                isInitialized = false;
+            }
+            
+            SetData(boardAccount);
         }
         
         private async void OnGameActionHistoryChange(GameActionHistory gameActionHistory)
@@ -119,19 +135,19 @@ namespace DefaultNamespace
                     
                     if (gameAction.ActionType == ACTION_TYPE_CHOP)
                     {
-                        var tileConfig = FindTileConfigByNumber(gameAction.Tile);
+                        var tileConfig = FindTileConfigByTileData(gameAction.Tile);
                         targetCell.Tile.Init(tileConfig, gameAction.Tile, true);
                     }
 
                     if (gameAction.ActionType == ACTION_TYPE_BUILD)
                     {
-                        var tileConfig = FindTileConfigByNumber(gameAction.Tile);
+                        var tileConfig = FindTileConfigByTileData(gameAction.Tile);
                         targetCell.Tile.Init(tileConfig, gameAction.Tile, true);
                     }
                     
                     if (gameAction.ActionType == ACTION_TYPE_UPGRADE)
                     {
-                        var tileConfig = FindTileConfigByNumber(gameAction.Tile);
+                        var tileConfig = FindTileConfigByTileData(gameAction.Tile);
                         targetCell.Tile.Init(tileConfig, gameAction.Tile, true);
                     }
                     
@@ -139,8 +155,8 @@ namespace DefaultNamespace
                     {
                         var blimp = Instantiate(CoinBlimpPrefab);
 
-                        var tileConfig = FindTileConfigByNumber(gameAction.Tile);
-                        blimp.SetData("5", null, tileConfig);
+                        var tileConfig = FindTileConfigByTileData(gameAction.Tile);
+                        blimp.SetData(gameAction.Amount.ToString(), null, tileConfig);
                         targetCell.Tile.Init(tileConfig, gameAction.Tile, true);
                         blimp.transform.position = targetCell.transform.position;
                         Nft nft = null;
@@ -159,21 +175,70 @@ namespace DefaultNamespace
                             nft = ServiceFactory.Resolve<NftService>().CreateDummyLocalNft(gameAction.Avatar);
                         }
                         
-                        blimp.SetData("5", nft, tileConfig);
+                        blimp.SetData(gameAction.Amount.ToString(), nft, tileConfig);
                         blimp.AddComponent<DestroyDelayed>();
                         Debug.Log("Is collectable: " + LumberjackService.IsCollectable(gameAction.Tile));
                     }
                     
+                    if (gameAction.ActionType == ACTION_TYPE_FIGHT)
+                    {
+                        PerformFightAction(gameAction, targetCell);
+                    }
+
+                    if (gameAction.ActionType == ACTION_TYPE_RESET)
+                    {
+                        if (CurrentBaordAccount.EvilWon || CurrentBaordAccount.GoodWon)
+                        {
+                            OnGameReset();
+                            CreateStartingTiles(CurrentBaordAccount);
+                            isInitialized = false;
+                        }
+                    }
+
                     alreadyPrerformedGameActions.Add(gameAction.ActionId, gameAction);
                 }
             }   
         }
 
-        public void SetData(BoardAccount playerData)
+        private async UniTask PerformFightAction(GameAction gameAction, Cell targetCell)
+        {
+            var tileConfig = FindTileConfigByTileData(gameAction.Tile);
+            var text = "-" + gameAction.Amount;
+            targetCell.Tile.Init(tileConfig, gameAction.Tile, true);
+            targetCell.Tile.GetComponentInChildren<Animator>().Play("Attack");
+            await UniTask.Delay(800);
+            
+            Nft nft = null;
+            try
+            {
+                var rpc = Web3.Wallet.ActiveRpcClient;
+                nft = await Nft.TryGetNftData(gameAction.Avatar, rpc).AsUniTask();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("Could not load nft" + e);
+            }
+
+            if (nft == null)
+            {
+                nft = ServiceFactory.Resolve<NftService>().CreateDummyLocalNft(gameAction.Avatar);
+            }
+            
+            var blimp = Instantiate(FightBlimp);
+            //blimp.SetData(text, null, tileConfig);
+            blimp.transform.position = targetCell.transform.position + new Vector3(0, 1.89f, -1.88f);
+
+            blimp.SetData(text, nft, tileConfig);
+            blimp.AddComponent<DestroyDelayed>();
+            Debug.Log("Is collectable: " + LumberjackService.IsCollectable(gameAction.Tile));
+        }
+
+        public void SetData(BoardAccount boardAccount)
         {
             if (!isInitialized)
             {
-                CreateStartingTiles(playerData);
+                OnGameReset();
+                CreateStartingTiles(boardAccount);
                 isInitialized = true;
             }
             else
@@ -187,15 +252,15 @@ namespace DefaultNamespace
             {
                 for (int j = 0; j < HEIGHT; j++)
                 {
-                    if (playerData.Data[j][i].BuildingType != 0 && GetCell(i, j).Tile == null)
+                    if (boardAccount.Data[j][i].BuildingType != 0 && GetCell(i, j).Tile == null)
                     {
                         anyTileOutOfSync = true;
                         Debug.LogWarning("Tiles out of sync.");
                     }else 
-                    if (playerData.Data[j][i].BuildingType != GetCell(i, j).Tile.currentConfig.building_type)
+                    if (boardAccount.Data[j][i].BuildingType != GetCell(i, j).Tile.currentConfig.building_type)
                     {
                         anyTileOutOfSync = true;
-                        Debug.LogWarning($"Tiles out of sync. x {i} y {j} from socket: {playerData.Data[j][i]} board: {GetCell(i, j).Tile.currentConfig.Number} ");
+                        Debug.LogWarning($"Tiles out of sync. x {i} y {j} from socket: {boardAccount.Data[j][i]} board: {GetCell(i, j).Tile.currentConfig.Number} ");
                     }
                 } 
             }
@@ -282,7 +347,7 @@ namespace DefaultNamespace
             Tile tileInstance = Instantiate(TilePrefab, transform);
             
             tileInstance.transform.position = targetCell.transform.position;
-            TileConfig newConfig = FindTileConfigByNumber(tileData);
+            TileConfig newConfig = FindTileConfigByTileData(tileData);
             if (overrideColor != null)
             {
                 newConfig.MaterialColor = overrideColor.Value;
@@ -294,7 +359,7 @@ namespace DefaultNamespace
             tiles.Add(tileInstance);
         }
         
-        private TileConfig FindTileConfigByNumber(TileData tileData)
+        public TileConfig FindTileConfigByTileData(TileData tileData)
         {
             foreach (var tileConfig in tileConfigs)
             {

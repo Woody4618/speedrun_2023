@@ -16,5 +16,6 @@ namespace DefaultNamespace
         public byte building_type;
         public string BuildingName;
         public Sprite Icon;
+        public bool IsBuildable;
     }
 }

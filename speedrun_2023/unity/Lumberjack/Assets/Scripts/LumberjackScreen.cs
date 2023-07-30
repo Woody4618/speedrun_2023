@@ -17,11 +17,13 @@ public class LumberjackScreen : MonoBehaviour
     public Button RevokeSessionButton;
     public Button NftsButton;
     public Button InitGameDataButton;
+    public Button RestartButton;
 
     public TextMeshProUGUI EnergyAmountText;
     public TextMeshProUGUI WoodAmountText;
     public TextMeshProUGUI StoneAmountText;
     public TextMeshProUGUI NextEnergyInText;
+    public TextMeshProUGUI GameOverText;
 
     public GameObject LoadingSpinner;
 
@@ -29,6 +31,9 @@ public class LumberjackScreen : MonoBehaviour
     public GameObject NotInitializedRoot;
     public GameObject InitializedRoot;
     public GameObject NotLoggedInRoot;
+    public GameObject GameOverRoot;
+    public GameObject EvilWonRoot;
+    public GameObject GoodWonRoot;
     
     void Start()
     {
@@ -42,6 +47,7 @@ public class LumberjackScreen : MonoBehaviour
         RevokeSessionButton.onClick.AddListener(OnRevokeSessionButtonClicked);
         NftsButton.onClick.AddListener(OnNftsButtonnClicked);
         InitGameDataButton.onClick.AddListener(OnInitGameDataButtonClicked);
+        RestartButton.onClick.AddListener(OnRestartGameClicked);
         LumberjackService.OnPlayerDataChanged += OnPlayerDataChanged;
 
         StartCoroutine(UpdateNextEnergy());
@@ -57,6 +63,11 @@ public class LumberjackScreen : MonoBehaviour
     private async void OnInitGameDataButtonClicked()
     {
         await LumberjackService.Instance.InitGameDataAccount(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"));
+    }
+
+    private async void OnRestartGameClicked()
+    {
+        await LumberjackService.Instance.RestartGame();
     }
 
     private void OnNftsButtonnClicked()
@@ -98,9 +109,25 @@ public class LumberjackScreen : MonoBehaviour
         NotInitializedRoot.SetActive(!isInitialized);
         InitGameDataButton.gameObject.SetActive(!isInitialized && LumberjackService.Instance.CurrentPlayerData == null);
         InitializedRoot.SetActive(isInitialized);
-
+            
         NotLoggedInRoot.SetActive(Web3.Account == null);
 
+        if (LumberjackService.Instance.CurrentBoardAccount != null)
+        {
+            GameOverRoot.SetActive(LumberjackService.Instance.CurrentBoardAccount.EvilWon || LumberjackService.Instance.CurrentBoardAccount.GoodWon);
+            if (LumberjackService.Instance.CurrentBoardAccount.EvilWon)
+            {
+                GameOverText.text = "Game Over! Evil Won!";
+                EvilWonRoot.gameObject.SetActive(true);
+                GoodWonRoot.gameObject.SetActive(false);
+            } else if (LumberjackService.Instance.CurrentBoardAccount.GoodWon)
+            {
+                GameOverText.text = "Game Over! Good Won!";
+                EvilWonRoot.gameObject.SetActive(false);
+                GoodWonRoot.gameObject.SetActive(true);
+            }
+        }
+        
         if (LumberjackService.Instance.CurrentPlayerData == null)
         {
             return;
@@ -130,8 +157,11 @@ public class LumberjackScreen : MonoBehaviour
         }
         
         EnergyAmountText.text = LumberjackService.Instance.CurrentPlayerData.Energy.ToString();
-        WoodAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Wood.ToString();
-        StoneAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Stone.ToString();
+        if (LumberjackService.Instance.CurrentBoardAccount != null)
+        {
+            WoodAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Wood.ToString();
+            StoneAmountText.text = LumberjackService.Instance.CurrentBoardAccount.Stone.ToString();
+        }
     }
 
     private void OnChuckWoodSessionButtonClicked()

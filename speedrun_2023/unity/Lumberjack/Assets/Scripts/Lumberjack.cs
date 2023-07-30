@@ -37,6 +37,12 @@ namespace Lumberjack
 
             public ulong DammLevel { get; set; }
 
+            public bool Initialized { get; set; }
+
+            public bool EvilWon { get; set; }
+
+            public bool GoodWon { get; set; }
+
             public static BoardAccount Deserialize(ReadOnlySpan<byte> _data)
             {
                 int offset = 0;
@@ -67,6 +73,12 @@ namespace Lumberjack
                 offset += 8;
                 result.DammLevel = _data.GetU64(offset);
                 offset += 8;
+                result.Initialized = _data.GetBool(offset);
+                offset += 1;
+                result.EvilWon = _data.GetBool(offset);
+                offset += 1;
+                result.GoodWon = _data.GetBool(offset);
+                offset += 1;
                 return result;
             }
         }
@@ -166,7 +178,11 @@ namespace Lumberjack
             TileCantBeUpgraded = 6002U,
             TileHasNoTree = 6003U,
             WrongAuthority = 6004U,
-            TileCantBeCollected = 6005U
+            TileCantBeCollected = 6005U,
+            ProductionNotReadyYet = 6006U,
+            BuildingTypeNotCollectable = 6007U,
+            NotEnoughStone = 6008U,
+            NotEnoughWood = 6009U
         }
     }
 
@@ -176,7 +192,7 @@ namespace Lumberjack
         {
             public byte BuildingType { get; set; }
 
-            public byte BuildingLevel { get; set; }
+            public uint BuildingLevel { get; set; }
 
             public PublicKey BuildingOwner { get; set; }
 
@@ -186,13 +202,15 @@ namespace Lumberjack
 
             public long BuildingStartCollectTime { get; set; }
 
+            public long BuildingHealth { get; set; }
+
             public int Serialize(byte[] _data, int initialOffset)
             {
                 int offset = initialOffset;
                 _data.WriteU8(BuildingType, offset);
                 offset += 1;
-                _data.WriteU8(BuildingLevel, offset);
-                offset += 1;
+                _data.WriteU32(BuildingLevel, offset);
+                offset += 4;
                 _data.WritePubKey(BuildingOwner, offset);
                 offset += 32;
                 _data.WriteS64(BuildingStartTime, offset);
@@ -200,6 +218,8 @@ namespace Lumberjack
                 _data.WriteS64(BuildingStartUpgradeTime, offset);
                 offset += 8;
                 _data.WriteS64(BuildingStartCollectTime, offset);
+                offset += 8;
+                _data.WriteS64(BuildingHealth, offset);
                 offset += 8;
                 return offset - initialOffset;
             }
@@ -210,8 +230,8 @@ namespace Lumberjack
                 result = new TileData();
                 result.BuildingType = _data.GetU8(offset);
                 offset += 1;
-                result.BuildingLevel = _data.GetU8(offset);
-                offset += 1;
+                result.BuildingLevel = _data.GetU32(offset);
+                offset += 4;
                 result.BuildingOwner = _data.GetPubKey(offset);
                 offset += 32;
                 result.BuildingStartTime = _data.GetS64(offset);
@@ -219,6 +239,8 @@ namespace Lumberjack
                 result.BuildingStartUpgradeTime = _data.GetS64(offset);
                 offset += 8;
                 result.BuildingStartCollectTime = _data.GetS64(offset);
+                offset += 8;
+                result.BuildingHealth = _data.GetS64(offset);
                 offset += 8;
                 return offset - initialOffset;
             }
@@ -240,6 +262,8 @@ namespace Lumberjack
 
             public PublicKey Avatar { get; set; }
 
+            public ulong Amount { get; set; }
+
             public int Serialize(byte[] _data, int initialOffset)
             {
                 int offset = initialOffset;
@@ -256,6 +280,8 @@ namespace Lumberjack
                 offset += 32;
                 _data.WritePubKey(Avatar, offset);
                 offset += 32;
+                _data.WriteU64(Amount, offset);
+                offset += 8;
                 return offset - initialOffset;
             }
 
@@ -277,6 +303,8 @@ namespace Lumberjack
                 offset += 32;
                 result.Avatar = _data.GetPubKey(offset);
                 offset += 32;
+                result.Amount = _data.GetU64(offset);
+                offset += 8;
                 return offset - initialOffset;
             }
         }
@@ -390,6 +418,12 @@ namespace Lumberjack
             return await SignAndSendTransaction(instr, feePayer, signingCallback);
         }
 
+        public async Task<RequestResult<string>> SendRestartGameAsync(RestartGameAccounts accounts, PublicKey feePayer, Func<byte[], PublicKey, byte[]> signingCallback, PublicKey programId)
+        {
+            Solana.Unity.Rpc.Models.TransactionInstruction instr = Program.LumberjackProgram.RestartGame(accounts, programId);
+            return await SignAndSendTransaction(instr, feePayer, signingCallback);
+        }
+
         public async Task<RequestResult<string>> SendChopTreeAsync(ChopTreeAccounts accounts, byte x, byte y, PublicKey feePayer, Func<byte[], PublicKey, byte[]> signingCallback, PublicKey programId)
         {
             Solana.Unity.Rpc.Models.TransactionInstruction instr = Program.LumberjackProgram.ChopTree(accounts, x, y, programId);
@@ -428,7 +462,7 @@ namespace Lumberjack
 
         protected override Dictionary<uint, ProgramError<LumberjackErrorKind>> BuildErrorsDictionary()
         {
-            return new Dictionary<uint, ProgramError<LumberjackErrorKind>>{{6000U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.NotEnoughEnergy, "Not enough energy")}, {6001U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileAlreadyOccupied, "Tile Already Occupied")}, {6002U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileCantBeUpgraded, "Tile cant be upgraded")}, {6003U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileHasNoTree, "Tile has no tree")}, {6004U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.WrongAuthority, "Wrong Authority")}, {6005U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileCantBeCollected, "Tile cant be collected")}, };
+            return new Dictionary<uint, ProgramError<LumberjackErrorKind>>{{6000U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.NotEnoughEnergy, "Not enough energy")}, {6001U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileAlreadyOccupied, "Tile Already Occupied")}, {6002U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileCantBeUpgraded, "Tile cant be upgraded")}, {6003U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileHasNoTree, "Tile has no tree")}, {6004U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.WrongAuthority, "Wrong Authority")}, {6005U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.TileCantBeCollected, "Tile cant be collected")}, {6006U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.ProductionNotReadyYet, "Production not ready yet")}, {6007U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.BuildingTypeNotCollectable, "Building type not collectable")}, {6008U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.NotEnoughStone, "Not enough stone")}, {6009U, new ProgramError<LumberjackErrorKind>(LumberjackErrorKind.NotEnoughWood, "Not enough wood")}, };
         }
     }
 
@@ -438,6 +472,17 @@ namespace Lumberjack
         {
             public PublicKey Player { get; set; }
 
+            public PublicKey Board { get; set; }
+
+            public PublicKey GameActions { get; set; }
+
+            public PublicKey Signer { get; set; }
+
+            public PublicKey SystemProgram { get; set; }
+        }
+
+        public class RestartGameAccounts
+        {
             public PublicKey Board { get; set; }
 
             public PublicKey GameActions { get; set; }
@@ -542,6 +587,19 @@ namespace Lumberjack
                 byte[] _data = new byte[1200];
                 int offset = 0;
                 _data.WriteU64(4819994211046333298UL, offset);
+                offset += 8;
+                byte[] resultData = new byte[offset];
+                Array.Copy(_data, resultData, offset);
+                return new Solana.Unity.Rpc.Models.TransactionInstruction{Keys = keys, ProgramId = programId.KeyBytes, Data = resultData};
+            }
+
+            public static Solana.Unity.Rpc.Models.TransactionInstruction RestartGame(RestartGameAccounts accounts, PublicKey programId)
+            {
+                List<Solana.Unity.Rpc.Models.AccountMeta> keys = new()
+                {Solana.Unity.Rpc.Models.AccountMeta.Writable(accounts.Board, false), Solana.Unity.Rpc.Models.AccountMeta.Writable(accounts.GameActions, false), Solana.Unity.Rpc.Models.AccountMeta.Writable(accounts.Signer, true), Solana.Unity.Rpc.Models.AccountMeta.ReadOnly(accounts.SystemProgram, false)};
+                byte[] _data = new byte[1200];
+                int offset = 0;
+                _data.WriteU64(10140096924326872336UL, offset);
                 offset += 8;
                 byte[] resultData = new byte[offset];
                 Array.Copy(_data, resultData, offset);

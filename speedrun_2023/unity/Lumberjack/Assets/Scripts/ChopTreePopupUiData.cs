@@ -10,6 +10,6 @@ public class ChopTreePopupUiData : UiService.UiData
     public ChopTreePopupUiData(WalletBase wallet, Action onClick)
     {
         Wallet = wallet;
-        OnClick = onClick;
+        OnClick = onClick; 
     }
 }

@@ -23,3 +23,4 @@ MonoBehaviour:
   building_type: 2
   BuildingName: SawMill
   Icon: {fileID: 21300000, guid: b96f00b241a5646b281bed9ba703b7e1, type: 3}
+  IsBuildable: 1

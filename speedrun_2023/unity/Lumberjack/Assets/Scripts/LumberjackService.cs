@@ -29,6 +29,8 @@ public class LumberjackService : MonoBehaviour
     public const byte BUILDING_TYPE_EMPTY = 1;
     public const byte BUILDING_TYPE_SAWMILL = 2;
     public const byte BUILDING_TYPE_MINE = 3;
+    public const byte BUILDING_TYPE_GOOD = 4;
+    public const byte BUILDING_TYPE_EVIL = 5;
     
     public static LumberjackService Instance { get; private set; }
     public static Action<PlayerData> OnPlayerDataChanged;
@@ -225,6 +227,31 @@ public class LumberjackService : MonoBehaviour
         return initResult;
     }
 
+    public async Task<RequestResult<string>> RestartGame()
+    {
+        var tx = new Transaction()
+        {
+            FeePayer = Web3.Account,
+            Instructions = new List<TransactionInstruction>(),
+            RecentBlockHash = await Web3.BlockHash()
+        };
+
+        RestartGameAccounts accounts = new RestartGameAccounts();
+        accounts.Board = BoardPDA;
+        accounts.GameActions = GameActionsPDA;
+        accounts.Signer = Web3.Account;
+        accounts.SystemProgram = SystemProgram.ProgramIdKey;
+
+        var initTx = LumberjackProgram.RestartGame(accounts, LumberjackProgramIdPubKey);
+        tx.Add(initTx);
+
+        var initResult =  await Web3.Wallet.SignAndSendTransaction(tx, commitment: Commitment.Confirmed);
+        Debug.Log(initResult.RawRpcResponse);
+        await Web3.Rpc.ConfirmTransaction(initResult.Result, Commitment.Confirmed);
+        await SubscribeToPlayerDataUpdates();
+        return initResult;
+    }
+    
     public async Task<SessionWallet> RevokeSession()
     {
         await sessionWallet.PrepareLogout();
@@ -496,22 +523,33 @@ public class LumberjackService : MonoBehaviour
 
     public void OnCellClicked(byte x, byte y)
     {
-        if (!CheckForEnergy())
-        {
-            return;
-        }
         var cell = ServiceFactory.Resolve<BoardManager>().GetCell(x, y);
         var tileData = CurrentBoardAccount.Data[x][y];
-        if (tileData.BuildingType == BUILDING_TYPE_EMPTY)
+        if (tileData.BuildingType == BUILDING_TYPE_EVIL || tileData.BuildingType == BUILDING_TYPE_GOOD)
         {
+            var uiData = new UpgradeBuildingPopupUiData(Web3.Wallet, () =>
+            {
+                Upgrade(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);    
+            }, tileData);
+            ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.UpgradeBuildingPopup, uiData);
+        }else if (tileData.BuildingType == BUILDING_TYPE_EMPTY)
+        {
+            if (!CheckForEnergy(1))
+            {
+                return;
+            }
             // Build 
             var uiData = new BuildBuildingPopupUiData(Web3.Wallet, config =>
             {
                 Build(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y, config.building_type);
-            });
+            }, tileData);
             ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.BuildBuildingPopup, uiData);
         } else if (tileData.BuildingType == BUILDING_TYPE_TREE)
         {
+            if (!CheckForEnergy(3))
+            {
+                return;
+            }
             var uiData = new ChopTreePopupUiData(Web3.Wallet, () =>
             {
                 ChopTree(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);
@@ -520,7 +558,10 @@ public class LumberjackService : MonoBehaviour
         } else if (tileData.BuildingType == BUILDING_TYPE_MINE ||
                    tileData.BuildingType == BUILDING_TYPE_SAWMILL)
         {
-
+            if (!CheckForEnergy(1))
+            {
+                return;
+            }
             if (IsCollectable(tileData))
             {
                 // Collect
@@ -531,15 +572,15 @@ public class LumberjackService : MonoBehaviour
                 var uiData = new UpgradeBuildingPopupUiData(Web3.Wallet, () =>
                 {
                     Upgrade(!Web3.Rpc.NodeAddress.AbsoluteUri.Contains("localhost"), x, y);    
-                });
+                }, tileData);
                 ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.UpgradeBuildingPopup, uiData);
             }
         }
     }
 
-    private bool CheckForEnergy()
+    private bool CheckForEnergy(ulong amountNeeded)
     {
-        if (CurrentPlayerData.Energy == 0)
+        if (CurrentPlayerData.Energy < amountNeeded)
         {
             ServiceFactory.Resolve<UiService>().OpenPopup(UiService.ScreenType.RefillEnergyPopup, new RefillEnergyPopupUiData(Web3.Wallet));
             return false;
@@ -572,5 +613,21 @@ public class LumberjackService : MonoBehaviour
         {
             await Web3.Rpc.ConfirmTransaction(res.Result, Commitment.Confirmed);
         }
+    }
+
+    public static bool HasEnoughResources(BalancingService.Cost cost)
+    {
+        var hasEnoughWood = cost.Wood <= Instance.CurrentBoardAccount.Wood;
+        var hasEnoughStone = cost.Stone <= Instance.CurrentBoardAccount.Stone;
+
+        return hasEnoughWood && hasEnoughStone;
+    }
+    
+    public static bool HasEnoughResources(ulong woodCost, ulong stoneCost)
+    {
+        var hasEnoughWood = woodCost <= Instance.CurrentBoardAccount.Wood;
+        var hasEnoughStone = stoneCost <= Instance.CurrentBoardAccount.Stone;
+
+        return hasEnoughWood && hasEnoughStone;
     }
 }
